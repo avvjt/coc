@@ -8,7 +8,9 @@ dotenv.config();
 
 const CONFIG = {
     STATE_FILE: process.env.STATE_FILE || 'clan_state.json',
-    COUNTRY: process.env.COUNTRY || 'India',
+    LOCATIONS: process.env.LOCATIONS 
+        ? process.env.LOCATIONS.split(',').map(c => c.trim()) 
+        : ['India', 'International'],
     MIN_TROPHIES: parseInt(process.env.MIN_TROPHIES) || 4000,
     MIN_CLAN_POINTS: parseInt(process.env.MIN_CLAN_POINTS) || 40000,
     MIN_CLAN_MEMBERS: parseInt(process.env.MIN_CLAN_MEMBERS) || 40
@@ -17,57 +19,65 @@ const CONFIG = {
 async function trackNewMembers() {
     try {
         const state = loadState();
-
-        const locationId = await findLocationId(CONFIG.COUNTRY);
-        console.log(`Using location ID for ${CONFIG.COUNTRY}: ${locationId}`);
-
-        const clans = await fetchClans(locationId);
-        console.log(`Found ${clans.length} clans`);
-
-        // Filter active clans (clan level removed)
-        const activeClans = clans.filter(clan => 
-            clan.members >= CONFIG.MIN_CLAN_MEMBERS &&
-            clan.clanPoints >= CONFIG.MIN_CLAN_POINTS
-        );
-
-        console.log(`Processing ${activeClans.length} active clans (min ${CONFIG.MIN_CLAN_MEMBERS} members, ${CONFIG.MIN_CLAN_POINTS}+ points)`);
-
         const updates = [];
         let totalNewMembers = 0;
+        let totalClansProcessed = 0;
 
-        for (const clan of activeClans) {
+        for (const location of CONFIG.LOCATIONS) {
             try {
-                console.log(`Fetching details for ${clan.name} (${clan.tag}) - ${clan.members} members`);
-                const clanData = await fetchClanDetails(clan.tag);
-
-                // Filter qualified members
-                const qualifiedMembers = clanData.memberList.filter(
-                    member => member.trophies >= CONFIG.MIN_TROPHIES &&
-                              member.role === 'member'
+                console.log(`\nSearching clans in ${location}...`);
+                const locationId = await findLocationId(location);
+                
+                const clans = await fetchClans(locationId);
+                console.log(`Found ${clans.length} clans in ${location}`);
+                
+                // Filter active clans
+                const activeClans = clans.filter(clan => 
+                    clan.members >= CONFIG.MIN_CLAN_MEMBERS &&
+                    clan.clanPoints >= CONFIG.MIN_CLAN_POINTS
                 );
+                
+                console.log(`Processing ${activeClans.length} active clans in ${location}`);
+                totalClansProcessed += activeClans.length;
 
-                const newMembers = findNewMembers(state, clanData, qualifiedMembers);
+                for (const clan of activeClans) {
+                    try {
+                        const clanData = await fetchClanDetails(clan.tag);
+                        
+                        // Filter qualified members
+                        const qualifiedMembers = clanData.memberList.filter(
+                            member => member.trophies >= CONFIG.MIN_TROPHIES &&
+                                      member.role === 'member'
+                        );
 
-                if (newMembers.length > 0) {
-                    updates.push({
-                        clan: clanData.name,
-                        tag: clanData.tag,
-                        level: clanData.clanLevel,
-                        points: clanData.clanPoints,
-                        members: newMembers
-                    });
-                    totalNewMembers += newMembers.length;
+                        const newMembers = findNewMembers(state, clanData, qualifiedMembers);
 
-                    // Update state
-                    state[clanData.tag] = qualifiedMembers.map(m => m.tag);
+                        if (newMembers.length > 0) {
+                            updates.push({
+                                location,
+                                clan: clanData.name,
+                                tag: clanData.tag,
+                                level: clanData.clanLevel,
+                                points: clanData.clanPoints,
+                                members: newMembers
+                            });
+                            totalNewMembers += newMembers.length;
+
+                            // Update state
+                            state[clanData.tag] = qualifiedMembers.map(m => m.tag);
+                        }
+                    } catch (error) {
+                        console.error(`Error processing ${clan.name}: ${error.message}`);
+                    }
                 }
             } catch (error) {
-                console.error(`Error processing ${clan.name}: ${error.message}`);
+                console.error(`Error processing ${location}: ${error.message}`);
             }
         }
 
         saveState(state);
-        console.log(`Found ${totalNewMembers} new members with ${CONFIG.MIN_TROPHIES}+ trophies (regular members only)`);
+        console.log(`\nProcessed ${totalClansProcessed} clans across ${CONFIG.LOCATIONS.length} locations`);
+        console.log(`Found ${totalNewMembers} new qualified members`);
         return updates;
     } catch (error) {
         console.error('Tracker error:', error.message);
@@ -103,7 +113,6 @@ function findNewMembers(state, clanData, qualifiedMembers) {
             name: m.name,
             tag: m.tag,
             trophies: m.trophies
-            // Removed 'joined' date
         }));
 }
 
@@ -112,15 +121,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     trackNewMembers()
         .then(updates => {
             if (updates.length === 0) {
-                console.log('No new qualified members found');
+                console.log('\nNo new qualified members found');
                 return;
             }
 
-            console.log('\nNew member report (regular members only):');
-            updates.forEach(clan => {
-                console.log(`\n${clan.clan} (Level ${clan.level}, ${clan.points} points) - ${clan.members.length} new members:`);
-                clan.members.forEach(member => {
-                    console.log(`- ${member.name.padEnd(15)} ${member.trophies.toString().padStart(4)} trophies`);
+            console.log('\nNEW MEMBER REPORT:');
+            updates.forEach(update => {
+                console.log(`\n[${update.location}] ${update.clan} (Lvl ${update.level}, ${update.points} pts) - ${update.members.length} new members:`);
+                update.members.forEach(member => {
+                    console.log(`- ${member.name.padEnd(20)} ${member.trophies.toString().padStart(5)} trophies`);
                 });
             });
         })
