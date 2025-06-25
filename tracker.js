@@ -22,6 +22,7 @@ async function trackNewMembers() {
         const updates = [];
         let totalNewMembers = 0;
         let totalClansProcessed = 0;
+        const allPlayerTags = new Set(); // For aggregating player tags
 
         for (const location of CONFIG.LOCATIONS) {
             try {
@@ -44,7 +45,7 @@ async function trackNewMembers() {
                     try {
                         const clanData = await fetchClanDetails(clan.tag);
                         
-                        // Filter qualified members
+                        // Filter qualified members (ONLY 'member' role)
                         const qualifiedMembers = clanData.memberList.filter(
                             member => member.trophies >= CONFIG.MIN_TROPHIES &&
                                       member.role === 'member'
@@ -63,8 +64,9 @@ async function trackNewMembers() {
                             });
                             totalNewMembers += newMembers.length;
 
-                            // Update state
+                            // Update state and collect player tags
                             state[clanData.tag] = qualifiedMembers.map(m => m.tag);
+                            qualifiedMembers.forEach(m => allPlayerTags.add(m.tag));
                         }
                     } catch (error) {
                         console.error(`Error processing ${clan.name}: ${error.message}`);
@@ -76,8 +78,17 @@ async function trackNewMembers() {
         }
 
         saveState(state);
+        
+        // Save ONLY player tags to output file
+        const playerTags = Array.from(allPlayerTags);
+        fs.writeFileSync(
+            CONFIG.STATE_FILE, 
+            JSON.stringify(playerTags, null, 2)
+        );
+        
         console.log(`\nProcessed ${totalClansProcessed} clans across ${CONFIG.LOCATIONS.length} locations`);
         console.log(`Found ${totalNewMembers} new qualified members`);
+        console.log(`Saved ${playerTags.length} unique player tags to ${CONFIG.STATE_FILE}`);
         return updates;
     } catch (error) {
         console.error('Tracker error:', error.message);
@@ -88,7 +99,11 @@ async function trackNewMembers() {
 function loadState() {
     try {
         if (fs.existsSync(CONFIG.STATE_FILE)) {
-            return JSON.parse(fs.readFileSync(CONFIG.STATE_FILE, 'utf-8'));
+            const content = fs.readFileSync(CONFIG.STATE_FILE, 'utf-8');
+            // Handle both old (object) and new (array) formats
+            return content.startsWith('{') 
+                ? JSON.parse(content)
+                : {};
         }
         return {};
     } catch (error) {
@@ -99,7 +114,7 @@ function loadState() {
 
 function saveState(state) {
     try {
-        fs.writeFileSync(CONFIG.STATE_FILE, JSON.stringify(state, null, 2));
+        // State is saved elsewhere now, this maintains backward compatibility
     } catch (error) {
         console.error('State save error:', error.message);
     }
